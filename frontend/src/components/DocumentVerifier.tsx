@@ -10,6 +10,7 @@ import {
   Upload,
   FileText,
   Search,
+
   CheckCircle2,
   XCircle,
   ExternalLink,
@@ -92,6 +93,8 @@ export const DocumentVerifier: React.FC<DocumentVerifierProps> = ({
       alert("No documents attached to this shipment yet to test authentic verification.");
       return;
     }
+
+
 
     const doc = currentShipment.documents[0];
     setFileHashResult({

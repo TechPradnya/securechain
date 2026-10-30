@@ -1,7 +1,8 @@
+
 // MST Blockchain Testnet Configuration
 export const MST_TESTNET_CONFIG = {
   chainId: 91562037,
-  chainIdHex: "0x5752315", // 91562037 in hex
+  chainIdHex: "0x5752315",
   chainName: "MST Blockchain Testnet",
   rpcUrls: ["https://testnetrpc.mstblockchain.com"],
   nativeCurrency: {
@@ -12,5 +13,20 @@ export const MST_TESTNET_CONFIG = {
   blockExplorerUrls: ["https://testnet.mstscan.com"],
 };
 
-export const DEFAULT_RPC_URL = "https://testnetrpc.mstblockchain.com";
-export const EXPLORER_BASE_URL = "https://testnet.mstscan.com";
+// MST Blockchain Mainnet Configuration
+export const MST_MAINNET_CONFIG = {
+  chainId: 4646,
+  chainIdHex: "0x1226",
+  chainName: "MST Blockchain Mainnet",
+  rpcUrls: ["https://mariorpc.mstblockchain.com"],
+  nativeCurrency: {
+    name: "MST Coin",
+    symbol: "MSTC",
+    decimals: 18,
+  },
+  blockExplorerUrls: ["https://mstscan.com"],
+};
+
+// Keep Testnet as the default
+export const DEFAULT_RPC_URL = MST_TESTNET_CONFIG.rpcUrls[0];
+export const EXPLORER_BASE_URL = MST_TESTNET_CONFIG.blockExplorerUrls[0];

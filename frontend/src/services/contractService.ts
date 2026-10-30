@@ -1,6 +1,14 @@
 import { Contract, JsonRpcSigner, BrowserProvider, JsonRpcProvider } from "ethers";
-import { SECURE_CHAIN_ABI, SECURE_CHAIN_CONTRACT_ADDRESS } from "../config/contractConfig";
-import { DEFAULT_RPC_URL } from "../config/mstNetwork";
+import {
+  SECURE_CHAIN_ABI,
+  MST_TESTNET_CONTRACT_ADDRESS,
+  MST_MAINNET_CONTRACT_ADDRESS,
+} from "../config/contractConfig";
+import {
+  DEFAULT_RPC_URL,
+  MST_TESTNET_CONFIG,
+  MST_MAINNET_CONFIG,
+} from "../config/mstNetwork";
 import {
   Shipment,
   ShipmentStatus,
@@ -217,12 +225,39 @@ const INITIAL_DEMO_SHIPMENTS: Record<string, Shipment> = {
 };
 
 let demoStore: Record<string, Shipment> = { ...INITIAL_DEMO_SHIPMENTS };
-let txLedgerStore: MSTTransaction[] = [...INITIAL_TRANSACTIONS];
+let demoTxLedgerStore: MSTTransaction[] = [...INITIAL_TRANSACTIONS];
+let liveTxLedgerStore: MSTTransaction[] = [];
 
 export class ContractService {
-  private static getContract(signerOrProvider: JsonRpcSigner | BrowserProvider | JsonRpcProvider): Contract | null {
-    if (!SECURE_CHAIN_CONTRACT_ADDRESS) return null;
-    return new Contract(SECURE_CHAIN_CONTRACT_ADDRESS, SECURE_CHAIN_ABI, signerOrProvider);
+  private static async getContract(
+    signerOrProvider: JsonRpcSigner | BrowserProvider | JsonRpcProvider
+  ): Promise<Contract> {
+    const networkProvider =
+      signerOrProvider instanceof JsonRpcSigner
+        ? signerOrProvider.provider
+        : signerOrProvider;
+
+    const network = await networkProvider.getNetwork();
+    const chainId = Number(network.chainId);
+
+    let contractAddress: string;
+    let networkName: string;
+
+    if (chainId === MST_TESTNET_CONFIG.chainId) {
+      contractAddress = MST_TESTNET_CONTRACT_ADDRESS;
+      networkName = MST_TESTNET_CONFIG.chainName;
+    } else if (chainId === MST_MAINNET_CONFIG.chainId) {
+      contractAddress = MST_MAINNET_CONTRACT_ADDRESS;
+      networkName = MST_MAINNET_CONFIG.chainName;
+    } else {
+      throw new Error(`Unsupported MST network. Chain ID: ${chainId}`);
+    }
+
+    if (!contractAddress) {
+      throw new Error(`SecureChain contract is not deployed on ${networkName} yet.`);
+    }
+
+    return new Contract(contractAddress, SECURE_CHAIN_ABI, signerOrProvider);
   }
 
   private static getReadonlyProvider(): JsonRpcProvider {
@@ -236,14 +271,14 @@ export class ContractService {
     provider?: BrowserProvider | null,
     isDemoMode: boolean = false
   ): Promise<Shipment[]> {
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS) {
+    if (isDemoMode) {
       return Object.values(demoStore).sort((a, b) => b.updatedAt - a.updatedAt);
     }
 
     try {
       const activeProvider = provider || this.getReadonlyProvider();
-      const contract = this.getContract(activeProvider);
-      if (!contract) return Object.values(demoStore);
+      const contract = await this.getContract(activeProvider);
+      if (!contract) throw new Error("Contract not initialized");
 
       const trackingNumbers: string[] = await contract.getAllTrackingNumbers();
       const shipments: Shipment[] = [];
@@ -283,16 +318,17 @@ export class ContractService {
 
       return shipments.sort((a, b) => b.updatedAt - a.updatedAt);
     } catch (error) {
-      console.warn("Could not query on-chain shipments, falling back to simulated store:", error);
-      return Object.values(demoStore).sort((a, b) => b.updatedAt - a.updatedAt);
+      console.error("Could not query on-chain shipments:", error);
+      throw error;
     }
   }
 
   /**
    * Returns all recent MST on-chain transactions
    */
-  public static getTransactionLedger(): MSTTransaction[] {
-    return [...txLedgerStore].sort((a, b) => b.timestamp - a.timestamp);
+  public static getTransactionLedger(isDemoMode: boolean = false): MSTTransaction[] {
+    const ledger = isDemoMode ? demoTxLedgerStore : liveTxLedgerStore;
+    return [...ledger].sort((a, b) => b.timestamp - a.timestamp);
   }
 
   /**
@@ -306,7 +342,7 @@ export class ContractService {
     currentSimulatedBlock += 1;
     const now = Math.floor(Date.now() / 1000);
 
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS || !signer) {
+    if (isDemoMode) {
       const senderAddr = signer ? await signer.getAddress() : "0x71C83605655767b43aBe74D9063d8102a9009893";
       const txHash = generateTxHash();
 
@@ -352,7 +388,7 @@ export class ContractService {
       demoStore[input.trackingNumber] = newShipment;
 
       // Add to Ledger
-      txLedgerStore.unshift({
+      demoTxLedgerStore.unshift({
         hash: txHash,
         type: "ShipmentCreated",
         trackingNumber: input.trackingNumber,
@@ -368,13 +404,14 @@ export class ContractService {
       return { success: true, txHash, blockNumber: currentSimulatedBlock };
     }
 
-    const contract = this.getContract(signer);
+    if (!signer) throw new Error("Connect your wallet before submitting a blockchain transaction.");
+    const contract = await this.getContract(signer);
     if (!contract) throw new Error("Contract not initialized");
 
     const tx = await contract.createShipment(input);
     const receipt = await tx.wait();
 
-    txLedgerStore.unshift({
+    liveTxLedgerStore.unshift({
       hash: receipt.hash,
       type: "ShipmentCreated",
       trackingNumber: input.trackingNumber,
@@ -404,7 +441,7 @@ export class ContractService {
     currentSimulatedBlock += 1;
     const now = Math.floor(Date.now() / 1000);
 
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS || !signer) {
+    if (isDemoMode) {
       const shipment = demoStore[trackingNumber];
       if (!shipment) throw new Error("Shipment not found");
 
@@ -429,7 +466,7 @@ export class ContractService {
       });
 
       // Add to Ledger
-      txLedgerStore.unshift({
+      demoTxLedgerStore.unshift({
         hash: txHash,
         type: "CustodyTransferred",
         trackingNumber,
@@ -445,13 +482,14 @@ export class ContractService {
       return { success: true, txHash, blockNumber: currentSimulatedBlock };
     }
 
-    const contract = this.getContract(signer);
+    if (!signer) throw new Error("Connect your wallet before submitting a blockchain transaction.");
+    const contract = await this.getContract(signer);
     if (!contract) throw new Error("Contract not initialized");
 
     const tx = await contract.transferCustody(trackingNumber, newCustodian, location, note);
     const receipt = await tx.wait();
 
-    txLedgerStore.unshift({
+    liveTxLedgerStore.unshift({
       hash: receipt.hash,
       type: "CustodyTransferred",
       trackingNumber,
@@ -481,7 +519,7 @@ export class ContractService {
     currentSimulatedBlock += 1;
     const now = Math.floor(Date.now() / 1000);
 
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS || !signer) {
+    if (isDemoMode) {
       const shipment = demoStore[trackingNumber];
       if (!shipment) throw new Error("Shipment not found");
 
@@ -505,7 +543,7 @@ export class ContractService {
       });
 
       // Add to Ledger
-      txLedgerStore.unshift({
+      demoTxLedgerStore.unshift({
         hash: txHash,
         type: "StatusUpdated",
         trackingNumber,
@@ -520,13 +558,14 @@ export class ContractService {
       return { success: true, txHash, blockNumber: currentSimulatedBlock };
     }
 
-    const contract = this.getContract(signer);
+    if (!signer) throw new Error("Connect your wallet before submitting a blockchain transaction.");
+    const contract = await this.getContract(signer);
     if (!contract) throw new Error("Contract not initialized");
 
     const tx = await contract.updateStatus(trackingNumber, newStatus, location, note);
     const receipt = await tx.wait();
 
-    txLedgerStore.unshift({
+    liveTxLedgerStore.unshift({
       hash: receipt.hash,
       type: "StatusUpdated",
       trackingNumber,
@@ -555,7 +594,7 @@ export class ContractService {
     currentSimulatedBlock += 1;
     const now = Math.floor(Date.now() / 1000);
 
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS || !signer) {
+    if (isDemoMode) {
       const shipment = demoStore[trackingNumber];
       if (!shipment) throw new Error("Shipment not found");
 
@@ -574,7 +613,7 @@ export class ContractService {
       shipment.updatedAt = now;
 
       // Add to Ledger
-      txLedgerStore.unshift({
+      demoTxLedgerStore.unshift({
         hash: txHash,
         type: "DocumentAdded",
         trackingNumber,
@@ -589,13 +628,14 @@ export class ContractService {
       return { success: true, txHash, blockNumber: currentSimulatedBlock };
     }
 
-    const contract = this.getContract(signer);
+    if (!signer) throw new Error("Connect your wallet before submitting a blockchain transaction.");
+    const contract = await this.getContract(signer);
     if (!contract) throw new Error("Contract not initialized");
 
     const tx = await contract.addDocument(trackingNumber, documentHash, documentType, documentName);
     const receipt = await tx.wait();
 
-    txLedgerStore.unshift({
+    liveTxLedgerStore.unshift({
       hash: receipt.hash,
       type: "DocumentAdded",
       trackingNumber,
@@ -619,7 +659,7 @@ export class ContractService {
     provider?: BrowserProvider | null,
     isDemoMode: boolean = false
   ): Promise<VerificationResult> {
-    if (isDemoMode || !SECURE_CHAIN_CONTRACT_ADDRESS) {
+    if (isDemoMode) {
       const shipment = demoStore[trackingNumber];
       if (!shipment || !shipment.documents) {
         return { isVerified: false, documentType: "", documentName: "", uploadedBy: "", timestamp: 0 };
@@ -646,7 +686,7 @@ export class ContractService {
 
     try {
       const activeProvider = provider || this.getReadonlyProvider();
-      const contract = this.getContract(activeProvider);
+      const contract = await this.getContract(activeProvider);
       if (!contract) throw new Error("Contract not initialized");
 
       const result = await contract.verifyDocument(trackingNumber, documentHash);
@@ -747,7 +787,7 @@ export class ContractService {
           ],
         };
 
-        txLedgerStore.unshift({
+        demoTxLedgerStore.unshift({
           hash: txHash,
           type: "ShipmentCreated",
           trackingNumber: item.trackingNumber,

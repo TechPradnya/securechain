@@ -12,6 +12,7 @@ import { ImpactMetrics } from "./components/ImpactMetrics";
 import { NetworkGuide } from "./components/NetworkGuide";
 import { useWallet } from "./context/WalletContext";
 import { ContractService } from "./services/contractService";
+import { MST_MAINNET_CONFIG, MST_TESTNET_CONFIG } from "./config/mstNetwork";
 import {
   Shipment,
   ShipmentStatus,
@@ -31,12 +32,13 @@ import {
 } from "lucide-react";
 
 export const AppContent: React.FC = () => {
-  const { provider, signer, isDemoMode, account } = useWallet();
+  const { provider, signer, isDemoMode, account, chainId } = useWallet();
 
   const [activeTab, setActiveTab] = useState<string>("dashboard");
   const [shipments, setShipments] = useState<Shipment[]>([]);
   const [transactions, setTransactions] = useState<MSTTransaction[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Selected shipment for Detail view
   const [selectedShipment, setSelectedShipment] = useState<Shipment | null>(null);
@@ -76,9 +78,29 @@ export const AppContent: React.FC = () => {
   const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
+
+      // Never display Testnet or demo records on Mainnet.
+      if (!isDemoMode && chainId === MST_MAINNET_CONFIG.chainId) {
+        setShipments([]);
+        setTransactions([]);
+        setLoadError(
+          "SecureChain Mainnet contract has not been deployed yet."
+        );
+        return;
+      }
+
+      // Do not silently fall back to the default Testnet RPC.
+      if (!isDemoMode && !provider) {
+        setShipments([]);
+        setTransactions([]);
+        setLoadError("Connect your wallet to load blockchain data.");
+        return;
+      }
+
       const data = await ContractService.getAllShipments(provider, isDemoMode);
       setShipments(data);
-      const txs = ContractService.getTransactionLedger();
+      setLoadError(null);
+      const txs = ContractService.getTransactionLedger(isDemoMode);
       setTransactions(txs);
 
       // Keep selected shipment refreshed if open
@@ -88,14 +110,17 @@ export const AppContent: React.FC = () => {
       }
     } catch (err) {
       console.error("Error loading data:", err);
+      setShipments([]);
+      setTransactions([]);
+      setLoadError(err instanceof Error ? err.message : "Unable to load blockchain data.");
     } finally {
       setIsLoading(false);
     }
-  }, [provider, isDemoMode, selectedShipment]);
+  }, [provider, isDemoMode, selectedShipment, chainId]);
 
   useEffect(() => {
     loadData();
-  }, [provider, isDemoMode]);
+  }, [provider, isDemoMode, chainId]);
 
   // Execute an action with simulated on-chain broadcast animation
   const executeWithBroadcasting = async (
@@ -105,7 +130,9 @@ export const AppContent: React.FC = () => {
     setBroadcastingTx({
       stage: "signing",
       title,
-      details: "Authorizing cryptographic payload with BridgeKey...",
+      details: isDemoMode
+        ? "Demo Mode: No wallet signature or blockchain transaction required."
+        : "Authorizing cryptographic payload with BridgeKey...",
     });
 
     // Sub-second stage 1
@@ -113,7 +140,9 @@ export const AppContent: React.FC = () => {
     setBroadcastingTx({
       stage: "mempool",
       title,
-      details: "Broadcasting transaction to MST Blockchain Testnet validators (Chain ID 91562037)...",
+      details: isDemoMode
+          ? "Running in Demo Mode. No blockchain transaction will be submitted."
+          : `Broadcasting transaction to ${chainId === MST_MAINNET_CONFIG.chainId ? MST_MAINNET_CONFIG.chainName : MST_TESTNET_CONFIG.chainName}...`,
     });
 
     // Sub-second finality
@@ -123,7 +152,9 @@ export const AppContent: React.FC = () => {
     setBroadcastingTx({
       stage: "confirmed",
       title,
-      details: `Block finality reached (< 0.8s) on MST Blockchain!`,
+      details: isDemoMode
+        ? "Demo transaction completed. No on-chain transaction was submitted."
+        : "Transaction confirmed on MST Blockchain.",
       txHash: res.txHash,
       blockNumber: res.blockNumber,
     });
@@ -138,7 +169,13 @@ export const AppContent: React.FC = () => {
     try {
       await executeWithBroadcasting(`Registering ${input.trackingNumber}`, async () => {
         const res = await ContractService.createShipment(input, signer, isDemoMode);
-        showNotification("success", `Consignment ${input.trackingNumber} registered on MST!`, res.txHash);
+        showNotification(
+          "success",
+          isDemoMode
+            ? `Demo shipment ${input.trackingNumber} created successfully.`
+            : `Consignment ${input.trackingNumber} registered on MST!`,
+          res.txHash
+        );
         return res;
       });
     } catch (err: any) {
@@ -273,6 +310,29 @@ export const AppContent: React.FC = () => {
         shipmentCount={shipments.length}
         txCount={transactions.length}
       />
+
+      {/* Network and data status */}
+      <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4 space-y-3">
+        {isDemoMode ? (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+            Demo Mode: Displayed shipment data and actions are simulated, not blockchain records.
+          </div>
+        ) : chainId === MST_MAINNET_CONFIG.chainId ? (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+            MST Mainnet selected. SecureChain's Mainnet contract has not been deployed yet. Blockchain features are unavailable on Mainnet.
+          </div>
+        ) : chainId === MST_TESTNET_CONFIG.chainId ? (
+          <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-200">
+            Connected to MST Testnet.
+          </div>
+        ) : null}
+
+        {loadError && (
+          <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">
+            Blockchain data unavailable: {loadError}
+          </div>
+        )}
+      </div>
 
       {/* Broadcasting MST On-Chain Overlay Banner */}
       {broadcastingTx && (

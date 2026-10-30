@@ -30,3 +30,10 @@ frontend/dist/
 # Vercel generated files
 .vercel/
 frontend/.vercel/
+# Local backup files and temporary scripts
+*.backup.ts
+*.backup.tsx
+*.before-network-update.ts
+update_contract_service.py
+
+*.backup
